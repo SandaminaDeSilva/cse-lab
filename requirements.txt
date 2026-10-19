@@ -1,6 +1,10 @@
 httpx>=0.28,<1
 tenacity>=9,<10
 pandas>=2.2
+numpy>=1.26
 pyarrow>=17
 duckdb>=1.1
+pdfplumber>=0.11
+streamlit>=1.50
+plotly>=6
 pytest>=8

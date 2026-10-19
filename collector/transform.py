@@ -215,19 +215,31 @@ def financial_reports(raw: dict[str, Any], trade_date: dt.date) -> pd.DataFrame:
     return pd.DataFrame(out)
 
 
-def companies(company_raw: dict[str, Any], as_of: dt.date) -> pd.DataFrame:
-    """Weekly per-company snapshot: size, ranges, foreign holding, beta."""
+def companies(
+    company_raw: dict[str, Any], as_of: dt.date, profiles: dict[str, Any] | None = None
+) -> pd.DataFrame:
+    """Weekly per-company snapshot: sector, size, ranges, foreign holding, beta."""
+    profiles = profiles or {}
     out = []
     for symbol, resp in company_raw.items():
         info = (resp or {}).get("reqSymbolInfo") or {}
         beta = (resp or {}).get("reqSymbolBetaInfo") or {}
         if not info:
             continue
+        prof = profiles.get(symbol) or {}
+        summary = (prof.get("reqComSumInfo") or [{}])[0] or {}
+        business = (prof.get("infoCompanyBusinessSummary") or [{}])[0] or {}
         out.append(
             {
                 "as_of": as_of,
                 "symbol": symbol,
                 "name": info.get("name"),
+                "sector": normalize_sector(summary.get("sector")),
+                "sector_raw": summary.get("sector"),
+                "board": summary.get("boardType"),
+                "established": summary.get("established"),
+                "website": summary.get("web"),
+                "business": (business.get("body") or "").strip() or None,
                 "isin": info.get("isin"),
                 "shares_issued": info.get("quantityIssued"),
                 "par_value": info.get("parValue"),
@@ -249,6 +261,49 @@ def companies(company_raw: dict[str, Any], as_of: dt.date) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(out)
+
+
+# Company profiles give the sector as free text ("Banks ", "FOOD BEVERAGE & TOBACCO",
+# "Materials (1510)", sub-industry names...). Map them onto the 20 sector-index
+# names so stocks join with sector P/E and sector index levels.
+GICS_SECTORS = [
+    "Automobiles & Components", "Banks", "Capital Goods", "Commercial & Professional Services",
+    "Consumer Durables & Apparel", "Consumer Services", "Diversified Financials", "Energy",
+    "Food & Staples Retailing", "Food, Beverage & Tobacco", "Health Care Equipment & Services",
+    "Household & Personal Products", "Insurance", "Materials", "Real Estate Management&Development",
+    "Retailing", "Software & Services", "Telecommunication Services", "Transportation", "Utilities",
+]
+_SECTOR_ALIASES = {
+    "diversifiedfinancial": "Diversified Financials",
+    "diversifiedfinancialservices": "Diversified Financials",
+    "investmentbankingbrokerage": "Diversified Financials",
+    "consumerfinance": "Diversified Financials",
+    "banksfinanceinsurance": "Diversified Financials",
+    "propertycasualtyinsurance": "Insurance",
+    "multilineinsurance": "Insurance",
+    "applicationsoftware": "Software & Services",
+    "independentpowerproducersenergytraders": "Utilities",
+    "powerenergy": "Utilities",
+    "industrials": "Capital Goods",
+    "realestate": "Real Estate Management&Development",
+    "realestatedevelopment": "Real Estate Management&Development",
+}
+
+
+def _sector_key(text: str) -> str:
+    import re
+
+    t = re.sub(r"\(.*?\)|\d+", " ", text.lower()).replace(" and ", " ")
+    return re.sub(r"[^a-z]", "", t)
+
+
+_SECTOR_LOOKUP = {_sector_key(s): s for s in GICS_SECTORS} | _SECTOR_ALIASES
+
+
+def normalize_sector(raw: str | None) -> str | None:
+    if not raw or not raw.strip():
+        return None
+    return _SECTOR_LOOKUP.get(_sector_key(raw), raw.strip())
 
 
 def _num(value: Any) -> float | None:

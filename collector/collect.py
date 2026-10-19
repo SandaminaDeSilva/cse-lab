@@ -103,19 +103,22 @@ def fetch_daily(client: CSEClient) -> dict[str, Any]:
     return raw
 
 
-def fetch_companies(client: CSEClient, symbols: list[str]) -> dict[str, Any]:
-    out: dict[str, Any] = {}
+def fetch_companies(client: CSEClient, symbols: list[str]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Per-company summary (beta, ranges, size) and profile (sector, business)."""
+    summaries: dict[str, Any] = {}
+    profiles: dict[str, Any] = {}
     failed = []
     for n, sym in enumerate(symbols, 1):
         try:
-            out[sym] = client.fetch("companyInfoSummery", params={"symbol": sym})
+            summaries[sym] = client.fetch("companyInfoSummery", params={"symbol": sym})
+            profiles[sym] = client.fetch("companyProfile", params={"symbol": sym})
         except NonRetryableError:
             failed.append(sym)
         if n % 50 == 0:
             log.info("company snapshots: %d/%d", n, len(symbols))
     if failed:
         log.warning("no company data for %d symbols: %s", len(failed), ", ".join(failed[:15]))
-    return out
+    return summaries, profiles
 
 
 def build_tables(raw: dict[str, Any], day: dt.date) -> dict[str, pd.DataFrame]:
@@ -142,14 +145,20 @@ def update_status(data_dir: Path, day: dt.date, tables: dict[str, pd.DataFrame],
 
 def rebuild(data_dir: Path) -> int:
     """Rebuild every Parquet table from the raw archive (after a code fix)."""
-    days = sorted(p for p in (data_dir / "raw").glob("*/*") if p.is_dir())
+    # Daily snapshots live in data/raw/<YYYY>/<YYYY-MM-DD>/; skip anything else
+    # (such as data/raw/backfill/) and any folder without a trade summary.
+    days = sorted(
+        p for p in (data_dir / "raw").glob("[0-9][0-9][0-9][0-9]/*")
+        if p.is_dir() and (p / "tradeSummary.json.gz").exists()
+    )
     for folder in days:
         day = dt.date.fromisoformat(folder.name)
         raw = read_raw(folder)
         for name, df in build_tables(raw, day).items():
             write_table(df, table_path(data_dir, name, day))
         if "companyInfoSummery" in raw:
-            write_table(transform.companies(raw["companyInfoSummery"], day), table_path(data_dir, "companies", day))
+            companies = transform.companies(raw["companyInfoSummery"], day, raw.get("companyProfile"))
+            write_table(companies, table_path(data_dir, "companies", day))
         log.info("rebuilt %s", day)
     log.info("rebuilt %d days", len(days))
     return 0
@@ -195,9 +204,22 @@ def run(data_dir: Path, force: bool = False, companies: str = "auto", allow_open
         if companies == "always" or (companies == "auto" and due):
             symbols = sorted(tables["prices"]["symbol"].dropna().unique())
             log.info("fetching weekly company snapshot for %d symbols", len(symbols))
-            company_raw = fetch_companies(client, symbols)
+            company_raw, profiles = fetch_companies(client, symbols)
             write_raw(folder, "companyInfoSummery", company_raw)
-            write_table(transform.companies(company_raw, day), table_path(data_dir, "companies", day))
+            write_raw(folder, "companyProfile", profiles)
+            write_table(
+                transform.companies(company_raw, day, profiles), table_path(data_dir, "companies", day)
+            )
+
+        # Central Bank indicators (rates, T-bills, rupee, inflation, oil).
+        # Best effort: a CBSL problem must never cost us the stock data.
+        try:
+            from . import macro
+
+            macro.update(data_dir, days=10, today=day)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("macro update skipped: %s", exc)
+            warnings.append(f"macro update skipped: {exc}")
 
         update_status(data_dir, day, tables, warnings)
         log.info(

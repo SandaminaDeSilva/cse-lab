@@ -86,3 +86,21 @@ def test_store_and_query_roundtrip(tmp_path, raw, tables):
     # Rebuilding from the raw archive reproduces the same tables.
     collect.rebuild(tmp_path)
     assert connect(tmp_path).sql("select count(*) from prices").fetchone()[0] == 283
+
+
+def test_sector_names_normalised():
+    assert transform.normalize_sector("Banks ") == "Banks"
+    assert transform.normalize_sector("FOOD BEVERAGE & TOBACCO") == "Food, Beverage & Tobacco"
+    assert transform.normalize_sector("Materials (1510)") == "Materials"
+    assert transform.normalize_sector("Real Estate Management & Development") == "Real Estate Management&Development"
+    assert transform.normalize_sector("- Property & Casualty Insurance") == "Insurance"
+    assert transform.normalize_sector("Trading") == "Trading"  # unknown labels pass through
+    assert transform.normalize_sector("  ") is None
+
+
+def test_rebuild_ignores_backfill_folder(tmp_path, raw, tables):
+    for name, payload in raw.items():
+        collect.write_raw(collect.raw_dir(tmp_path, DAY), name, payload)
+    collect.write_raw(tmp_path / "raw" / "backfill" / "2026-10-19", "chartData", {"ASPI": []})
+    collect.rebuild(tmp_path)
+    assert connect(tmp_path).sql("select count(*) from prices").fetchone()[0] == 283
