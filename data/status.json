@@ -1,13 +1,13 @@
 {
-  "last_trade_date": "2026-10-19",
-  "collected_at": "2026-10-19T22:09:04+05:30",
+  "last_trade_date": "2026-10-20",
+  "collected_at": "2026-10-20T19:58:52+05:30",
   "rows": {
-    "prices": 283,
+    "prices": 276,
     "indices": 2,
     "sectors": 20,
     "market": 1,
     "announcements": 72,
-    "financial_reports": 8
+    "financial_reports": 9
   },
   "warnings": []
 }
